@@ -1,0 +1,460 @@
+//============================================================================
+// Name        : ReverseTimeMigration.cpp
+// Author      : Makoto Sadahiro
+// Version     :
+// Copyright   : Texas Advanced Computing Center
+// Description : Reverse Time Migration for 2-D (XT to XZ) space
+//============================================================================
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cmath>
+#include <limits>
+#include <sstream>
+#include <fstream>
+#include <iostream>
+#include <iomanip>	// setting precision of output
+using namespace std;
+
+const string rtm_build_date = __DATE__;
+const string rtm_build_time = __TIME__;
+
+bool longdouble2pgm(string szFilename, long double* d_plane, int dim_x,
+    int dim_z){
+
+	cout << "longdouble2pgm begin" << endl;
+
+	szFilename += ".pgm";
+	ofstream outfile;
+	outfile.open(szFilename.c_str());
+	if(!outfile){
+		cerr << "file not found" << endl;
+		return false;
+	}
+
+	// need conversion from double to int(0-255) here
+	long double d_max = 0.0;
+	long double d_min = numeric_limits<long double>::max();
+
+	for(int i = 0; i < dim_x * dim_z; i++){
+		if(d_plane[i] > d_max)
+			d_max = d_plane[i];
+		if(d_plane[i] < d_min)
+			d_min = d_plane[i];
+	}
+	cout << "finished acquiring source range" << endl << "value range: [ "
+	    << d_min << " .. " << d_max << " ]" << endl;
+
+	long double d_mux;
+	if(abs(d_max) > abs(d_min)){
+		d_mux = abs(d_max);
+	}else{
+		d_mux = abs(d_min);
+	}
+
+	long double i_mux = 127 / d_mux;
+
+	// converted grid
+	int* i_plane = new int[dim_x * dim_z];
+
+	for(int j = 0; j < dim_x * dim_z; j++){
+		i_plane[j] = (int)(d_plane[j] * i_mux + 127);
+		if(i_plane[j] > 254){
+			i_plane[j] = 255;
+			cerr << "longdouble2pgm error: passed 255" << endl;
+		}
+		if(i_plane[j] < 0){
+			i_plane[j] = 0;
+			cerr << "longdouble2pgm error: passed 0" << endl;
+		}
+	}
+
+	cout << " starting to write to pgm" << endl;
+
+	outfile << "P2" << endl << "# original is long double" << endl << dim_x
+	    << " " << dim_z << endl << "256" << endl;
+	for(int y = 0; y < dim_z; y++){
+		for(int x = 0; x < dim_x; x++){
+			outfile << i_plane[y * dim_x + x] << endl;
+		}
+	}
+	cout << " end of writing" << endl;
+
+	outfile.close();
+	cout << "float2pgm end" << endl;
+	return true;
+}
+
+long double load_array(string filename, long double* &e_grid, unsigned int x,
+    unsigned int z){
+
+	cout << "reading float elements from: " << filename << endl;
+
+	// process file
+	FILE *file_in;
+	if((file_in = fopen(filename.c_str(), "r")) == NULL){
+		cout << "sourceput file \"" << filename << "\" does not exist" << endl
+		    << "exiting...." << endl;
+		return false;
+	}//file opening assuarance
+
+	// load file in transpose (trace to row major)
+	float a_trace[z];
+	unsigned int num_read = 0;
+	long double v_max = 0.0;
+	long double v_min = numeric_limits<long double>::max();
+
+	for(unsigned int xc = 0; xc < x; xc++){
+
+		num_read = fread(a_trace, sizeof(float), z, file_in);
+		if(num_read != z)
+			cout << "error: reading counter in elements" << endl;
+
+		for(unsigned int tc = 0; tc < z; tc++){
+
+			e_grid[tc * x + xc] = (long double)(a_trace[tc]);
+			if(e_grid[tc * x + xc] > v_max)
+				v_max = e_grid[tc * x + xc];
+			if(e_grid[tc * x + xc] < v_min)
+				v_min = e_grid[tc * x + xc];
+
+		}
+	}
+
+	if(fclose(file_in) == -1){
+		cout << "input file did not close correctly" << endl << "exiting...."
+		    << endl;
+		return 0.0;
+	}
+
+	cout << "value range: [ " << v_min << " .. " << v_max << " ]" << endl;
+
+	// write out pgm
+	bool is_pgm_wrote;
+	is_pgm_wrote = longdouble2pgm(filename, e_grid, x, z);
+	if(!is_pgm_wrote)
+		cout << "error writing pgm:" << filename << endl;
+	cout << endl << "load_array done." << endl;
+
+	long double r_max = abs(v_max);
+	long double r_min = abs(v_min);
+	if(r_max > r_min)
+		return r_max;
+	else
+		return r_min;
+}
+
+long double import_vel(string filename, long double* &vel_grid, unsigned int x,
+    unsigned int t){
+
+	cout << "loading velocity model" << endl;
+
+	long double ret_value = 1500.0;
+
+		 //This is temp measure to use 1500m/s all over
+			for(unsigned int i = 0; i < (x*t); i++){
+				vel_grid[i] = 1500.0;
+			}
+
+//	// read in velocity model
+//	ret_value = load_array(filename, vel_grid, x, t);
+
+	cout << "multipling velocity with 0.9 as Dr.Stoffa suggested." << endl;
+	for(unsigned int v = 0; v < x * t; v++){
+		vel_grid[v] *= 0.8;
+	}
+
+	return ret_value;
+}
+
+bool import_xt(string filename, long double* &xt_grid, unsigned int x,
+    unsigned int t){
+
+	cout << "loading xt model" << endl;
+
+	// place holder, use data from seg-y export
+	//	for(unsigned int i = 0; i < (x*t); i++){
+	//		xt_grid[i] = 100.0;
+	//	}
+
+	return load_array(filename, xt_grid, x, t);
+}
+
+int main(int argc, char *argv[]){
+
+	cout << "Reverse Time Migration," << endl << "  build date/time "
+	    << rtm_build_date << " " << rtm_build_time << endl
+	    << "usage: rtm velocity_infile  xt_infile  dim_x  dim_t" << endl;
+
+	// CMP 125~9824: 9700 inclusively
+	unsigned int dim_x = atoi(argv[3]); // 9700;
+	// 3000ms recording time is used for z scale
+	unsigned int dim_t = atoi(argv[4]); // 3001;
+
+	// default dim_z value
+	unsigned int dim_z = 1000; // dim_t;  // default if vel model is not read
+
+	// CMP spacing
+	unsigned int d_cmp = 6.25;
+
+	// sampling interval is 1ms
+	long double dt = 0.001;
+
+	// total xt cell count
+	unsigned int cell_count_t = dim_x * dim_t;
+
+	// velocity model
+	long double* v_plane = new long double[cell_count_t];
+	// return value used to determine file loading success
+	long double return_value_v;
+	// load up velocity model here
+	string vel_if = argv[1];
+	return_value_v = import_vel(vel_if, v_plane, dim_x, dim_t);
+	cout << "maximum velocity from velocity analysis model = " << return_value_v
+	    << endl;
+
+	// dx of grid, CMP spacing
+	long double dx = d_cmp;
+
+	// dz comes from sampling interval, dist = vel * time
+	// later change this to use rms vel for vel
+	// current 1500 as vel is to compare with fkmig
+	// or just use dz = dx for square cells
+
+	// max travel distance possible by waves
+	long double max_travel = (return_value_v * ((dim_t - 1) / 1000));
+	cout << "maximum possible travel distance by wave in " << dim_t - 1
+	    << " ms = " << max_travel << " meters." << endl;
+
+	//	long double dz = 1500.0 * dt;
+	//	long double dz = dx;
+
+	// distribute total possible travel distance by time step counts
+	long double dz = max_travel / dim_t;
+	cout << "dz = " << dz << endl;
+
+	// redefine dim_z from velocity model
+	// cells needed for total possible travel distance divided by dz
+	dim_z = ceil(max_travel / dz);
+	cout << "dimension z = " << dim_z << " cells." << endl;
+
+	// total xz cell count
+	unsigned int cell_count_z = dim_x * dim_z;
+
+	// source data: xt_plane
+	long double* xt_plane = new long double[cell_count_t];
+	// return value used to determine file loading success
+	bool return_value_xt;
+	// load up xt plane here
+	string xt_if = argv[2];
+	return_value_xt = import_xt(xt_if, xt_plane, dim_x, dim_t);
+
+	// process cells in three time steps
+	long double* xz_plane_0 = new long double[cell_count_z];
+	long double* xz_plane_1 = new long double[cell_count_z];
+	long double* xz_plane_2 = new long double[cell_count_z];
+
+	// grid for gain function
+	long double* g_plane = new long double[cell_count_z];
+
+	// alias for three time steps cell planes
+	// t_minus is target plane that is affected by t_zero and t_plus
+	// these plane will rotate in time for reuse
+	long double* t_minus = xz_plane_0;
+	long double* t_zero = xz_plane_1;
+	long double* t_plus = xz_plane_2;
+
+	// init all processing planes to zero value, just in case
+	for(unsigned int i = 0; i < cell_count_z; i++){
+		t_minus[i] = 0.0;
+		t_zero[i] = 0.0;
+		t_plus[i] = 0.0;
+	}
+
+	// test
+//	for(unsigned int i = 40; i < 60; i++){
+//		for(unsigned int j = 40; j < 60; j++){
+//			t_minus[i * dim_x + j] = 1000000;
+//			t_zero[i * dim_x + j] = 4000000;
+//			t_plus[i * dim_x + j] = 8000000;
+//		}
+//	}
+
+
+	long double dtdx = dt / dx;
+	long double dtdz = dt / dz;
+	long double p_dtdx = pow(dtdx, 2);
+	long double p_dtdz = pow(dtdz, 2);
+
+	// pre-calculate square of velocity model
+	for(unsigned int vl = 0; vl < dim_x * dim_t; vl++){
+		v_plane[vl] = pow(v_plane[vl], 2);
+	}
+
+	if(return_value_v && return_value_xt){
+
+		// target xtz index for center coordinate
+		unsigned int i_cc;
+
+		// temp pointer for rotating three planes
+		long double* t_tmp;
+
+		// feed a row at t = rtime into z = 0 and run convolution
+		// rtime starts at 3000 and ends at 0; total of 3001 cycles
+		for(int rtime = dim_t - 1; rtime >= 0; rtime--){
+
+			cout << "r-time:" << rtime << endl;
+
+			// rotate three planes
+			t_tmp = t_plus;
+			t_plus = t_zero;
+			t_zero = t_minus;
+			t_minus = t_tmp;
+
+			// feed a line from xt_plane
+			memcpy(t_zero, xt_plane + (dim_x * rtime), dim_x * sizeof(long double));
+
+			// this is new thing tried since the krnel has too much zeros to fight with
+			//			memcpy(t_plus, xt_plane + (dim_x * rtime), dim_x * sizeof(long double));
+
+			// convolution for all t_zero cells, except z = 0
+			// iteration starts at 1 because z = 0 is not processed
+			// boundary conditions are taken care of by different kernels
+
+
+			// case x,z top left corner
+			t_minus[0] = 2 * t_zero[0] - t_plus[0] + v_plane[0] *
+					(p_dtdx * (t_zero[dim_x + 1] - 2 * t_zero[0] + 0.0)
+							+ p_dtdz * (0.0 - 2 * t_zero[dim_x] + t_zero[dim_x]));
+
+			// case x,z top edge
+			for(unsigned int nx = 1; nx < dim_x - 1; nx++){
+				t_minus[nx] = 2 * t_zero[nx] - t_plus[nx] + v_plane[nx] *
+						(p_dtdx * (t_zero[nx + 1] - 2 * t_zero[nx] + t_zero[nx - 1])
+								+ p_dtdz * (0.0 - 2 * t_zero[nx] + t_zero[nx + dim_x]));
+			}
+
+			// case x,z top right corner
+			t_minus[dim_x - 1] = 2 * t_zero[dim_x - 1] - t_plus[dim_x - 1] + v_plane[dim_x - 1] *
+					(p_dtdx * (0.0 - 2 * t_zero[dim_x - 1] + t_zero[dim_x - 2])
+							+ p_dtdz * (0.0 - 2 * t_zero[dim_x - 1] + t_zero[dim_x * 2 - 1]));
+
+			// case mid band including LR edge (LR will be overwritten)
+			for(unsigned int nxt = dim_x; nxt < dim_x * (dim_z - 1) - 1; nxt++){
+				t_minus[nxt] = 2 * t_zero[nxt] - t_plus[nxt] + v_plane[nxt] *
+						(p_dtdx * (t_zero[nxt + 1] - 2 * t_zero[nxt] + t_zero[nxt - 1])
+				        + p_dtdz * (t_zero[nxt - dim_x] - 2 * t_zero[nxt] + t_zero[nxt + dim_x]));
+				if(std::isnan(t_minus[nxt])){
+					cerr << "NaN" << endl
+							<< "t_zero[nxt] " << t_zero[nxt] << endl
+							<< "t_plus[nxt] " << t_plus[nxt] << endl
+							<< "v_plane[nxt]" << v_plane[nxt] << endl
+							<< "t_zero[nxt - dim_x] " << t_zero[nxt - dim_x] << endl
+							<< "t_zero[nxt - 1] " << t_zero[nxt - 1] << endl
+							<< endl;
+					getchar();
+				}
+			}
+
+			// case left edge
+			for(unsigned int ntl = 1; ntl < (dim_z - 1); ntl++){
+				i_cc = ntl * dim_x;
+				t_minus[i_cc] = 2 * t_zero[i_cc] - t_plus[i_cc] + v_plane[i_cc] *
+						(p_dtdx * (t_zero[i_cc + 1] - 2 * t_zero[i_cc] + 0.0)
+				        + p_dtdz * (t_zero[i_cc - dim_x] - 2 * t_zero[i_cc] + t_zero[i_cc + dim_x]));
+			}
+
+			// case right edge
+			for(unsigned int ntr = 2; ntr < (dim_z - 1); ntr++){
+				i_cc = ntr * dim_x + dim_x - 1;
+				t_minus[i_cc] = 2 * t_zero[i_cc] - t_plus[i_cc] + v_plane[i_cc] *
+						(p_dtdx * (0.0 - 2 * t_zero[i_cc] + t_zero[i_cc - 1])
+				        + p_dtdz * (t_zero[i_cc - dim_x] - 2 * t_zero[i_cc] + t_zero[i_cc + dim_x]));
+			}
+
+			// case bottom left corner
+			i_cc = dim_x * (dim_z - 1);
+			t_minus[i_cc] = 2 * t_zero[i_cc] - t_plus[i_cc] + v_plane[i_cc] *
+					(p_dtdx * (t_zero[i_cc + 1] - 2 * t_zero[i_cc] + 0.0)
+			        + p_dtdz * (t_zero[i_cc - dim_x] - 2 * t_zero[i_cc] + 0.0));
+
+			// case bottom edge
+			for(unsigned int ntb = dim_x * (dim_z - 1) + 1; ntb < dim_x * dim_z - 1; ntb++){
+				t_minus[ntb] = 2 * t_zero[ntb] - t_plus[ntb] + v_plane[ntb] *
+						(p_dtdx * (t_zero[ntb + 1] - 2 * t_zero[ntb] + t_zero[ntb - 1])
+								+ p_dtdz * (t_zero[ntb - dim_x] - 2 * t_zero[ntb] + 0.0));
+			}
+
+			// case bottom right corner
+			i_cc = dim_x * dim_z - 1;
+			t_minus[i_cc] = 2 * t_zero[i_cc] - t_plus[i_cc] + v_plane[i_cc] *
+					(p_dtdx * (0.0 - 2 * t_zero[i_cc] + t_zero[i_cc - 1])
+			        + p_dtdz * (t_zero[i_cc - dim_x] - 2 * t_zero[i_cc] + 0.0));
+
+			//			// brute test
+			//			for(unsigned int nxt = dim_x; nxt < dim_x * (dim_z - 1) - 1; nxt++){
+			//				t_minus[nxt] = 2 * t_zero[nxt] - t_plus[nxt] + pow(v_plane[nxt], 2) *
+			//				    (p_dtdx * (t_zero[nxt + 1] - 2 * t_zero[nxt] + t_zero[nxt - 1])
+			//				    		+ pdtdz * (t_zero[nxt - dim_x] - 2 * t_zero[nxt] + t_zero[nxt + dim_x]));
+			//
+			//				if(std::isnan(t_minus[nxt])){
+			//					cerr << "NaN" << endl
+			//							 << "t_zero[nxt] " << t_zero[nxt] << endl
+			//							 << "t_plus[nxt] " << t_plus[nxt] << endl
+			//							 << "v_plane[nxt]" << v_plane[nxt] << endl
+			//							 << "t_zero[nxt - dim_x] " << t_zero[nxt - dim_x] << endl
+			//							 << "t_zero[nxt - 1] " << t_zero[nxt - 1] << endl
+			//							 << endl;
+			//					getchar();
+			//				}
+			//			}
+
+//						// gain function for pgm writeout
+//						// making copy for the result
+//						// original stays the same
+//						long double g_mux;
+//						for(unsigned int gj = 0; gj < dim_z; gj++){
+//								g_mux = pow(gj * 0.001, 2);
+//							for(unsigned int gi = 0; gi < dim_x; gi++){
+//								g_plane[gj * dim_x + gi] = t_minus[gj * dim_x + gi] * g_mux;
+//							}
+//						}
+
+
+			// write out pgm
+			if((rtime % atoi(argv[5])) == 0){
+				string filename = xt_if + "_RTMs_";
+				std::string tmpStrng;
+				std::stringstream tmpStrm;
+				tmpStrm << setfill('0') << setw(5) << rtime;
+				tmpStrng = tmpStrm.str();
+				filename += tmpStrng;
+//				if(!longdouble2pgm(filename, g_plane, dim_x, dim_z))
+			  if(!longdouble2pgm(filename, t_minus, dim_x, dim_z))
+					cout << "error writing pgm:" << filename << endl;
+			}
+
+		} // end of iteration for reverse time
+
+	} // condition of return_value_v && return_value_xt
+
+
+	// clean up arrays.  Thank you arrays
+	delete[] v_plane;
+	delete[] xt_plane;
+
+	delete[] xz_plane_0;
+	delete[] xz_plane_1;
+	delete[] xz_plane_2;
+
+	delete[] g_plane;
+
+	//	cout << "size of double is: " << sizeof(double) << endl;
+	//	cout << "size of long double is: " << sizeof(long double) << endl;
+	//	cout << endl;
+
+	cout << "exiting normally..." << endl;
+
+	return 0;
+}

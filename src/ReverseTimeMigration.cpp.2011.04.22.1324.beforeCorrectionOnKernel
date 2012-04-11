@@ -1,0 +1,391 @@
+//============================================================================
+// Name        : ReverseTimeMigration.cpp
+// Author      : Makoto Sadahiro
+// Version     :
+// Copyright   : Texas Advanced Computing Center
+// Description : Reverse Time Migration for 2-D (XT to XZ) space
+//============================================================================
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cmath>
+#include <limits>
+#include <sstream>
+#include <fstream>
+#include <iostream>
+#include <iomanip>	// setting precision of output
+
+using namespace std;
+
+const string rtm_build_date = __DATE__;
+const string rtm_build_time = __TIME__;
+
+bool double2pgm(string szFilename, double* d_plane, int dim_x, int dim_y){
+
+	cout << "double2pgm begin" << endl;
+
+	szFilename += ".pgm";
+  ofstream outfile;
+  outfile.open(szFilename.c_str());
+  if(!outfile){
+    cerr << "file not found" << endl;
+    return false;
+  }
+
+  cout << "starting conversion from double to int" << endl;
+
+  // need conversion from double to int(0-255) here
+  double d_max = 0.0;
+	double d_min = numeric_limits<double>::max();
+
+	for(int i = 0; i < dim_x * dim_y; i++){
+		if(d_plane[i] > d_max) d_max = d_plane[i];
+		if(d_plane[i] < d_min) d_min = d_plane[i];
+	}
+	cout << "finished acquiring source range" << endl
+			<< "range: [" << d_min << " .. " << d_max << "]" << endl;
+
+  double dp_range = d_max - 0;
+  double dm_range = 0 - d_min;
+
+  double dp_mux = 128 / dp_range;
+  double dm_mux = 127 / dm_range;
+
+  // converted grid
+  int* i_plane = new int[dim_x * dim_y];
+
+  for(int j = 0; j < dim_x * dim_y; j++){
+  	if(d_plane[j] >= 0){
+  		i_plane[j] = (int)(d_plane[j] * dp_mux + 127);
+  		if(i_plane[j] > 255){
+  			i_plane[j] = 255;
+  			cout << "passed 255" << endl;
+  		}
+  	}
+  	else{
+  		i_plane[j] = (int)((d_plane[j] - d_min) * dm_mux);
+  		if(i_plane[j] < 0){
+  			i_plane[j] = 0;
+  			cout << "passed 0" << endl;
+  		}
+  	}
+  }
+
+  cout << " starting to write to pgm" << endl;
+
+  outfile << "P2" << endl
+	  << "# original is double" << endl
+	  << dim_x << " " << dim_y << endl
+	  << "256" << endl;
+  for(int y = 0; y < dim_y; y++){
+    for(int x = 0; x < dim_x; x++){
+      outfile << i_plane[y * dim_x + x] << endl;
+    }
+  }
+  cout << " end of writing" << endl;
+
+  outfile.close();
+	cout << "float2pgm end" << endl;
+  return true;
+}
+
+bool load_array(string filename, double* &e_grid, unsigned int x,
+    unsigned int z){
+
+	cout << "reading float elements from: " << filename << endl;
+
+	// process file
+	FILE *file_in;
+	if((file_in = fopen(filename.c_str(), "r")) == NULL){
+		cout << "sourceput file \"" << filename << "\" does not exist" << endl
+		    << "exiting...." << endl;
+		return false;
+	}//file opening assuarance
+
+	// load file in transpose (trace to row major)
+	float a_trace[z];
+	unsigned int num_read = 0;
+
+	for(unsigned int xc = 0; xc < x; xc++){
+
+		num_read = fread(a_trace, sizeof(float), z, file_in);
+		if(num_read != z) cout << "error: reading counter in elements" << endl;
+
+		for(unsigned int tc = 0; tc < z; tc++){
+
+			e_grid[tc * x + xc] = (double)(a_trace[tc]);
+
+		}
+	}
+
+  if(fclose(file_in) == -1){
+    cout << "input file did not close correctly" << endl
+    		<< "exiting...." << endl;
+    return false;
+  }
+
+  // write out pgm
+  bool is_pgm_wrote;
+  is_pgm_wrote = double2pgm(filename, e_grid, x, z);
+  if(!is_pgm_wrote) cout << "error writing pgm:" << filename << endl;
+  cout << endl << "load_array done." << endl;
+	return true;
+}
+
+bool import_vel(string filename, double* &vel_grid, unsigned int x,
+    unsigned int z){
+
+	cout << "loading velocity model" << endl;
+
+	 //This is temp measure to use 1500m/s all over
+		for(unsigned int i = 0; i < (x*z); i++){
+			vel_grid[i] = 1500.0;
+		}
+
+	bool return_value = true;
+
+//	// read in velocity model
+//	return_value = load_array(filename, vel_grid, x, z);
+//	if(!return_value)	return false;
+
+	cout << "...done" << endl;
+	return return_value;
+}
+
+bool import_xt(string filename, double* &xt_grid, unsigned int x,
+    unsigned int t){
+
+	cout << "loading xt model" << endl;
+
+	// place holder, use data from seg-y export
+	//	for(unsigned int i = 0; i < (x*t); i++){
+	//		xt_grid[i] = 100.0;
+	//	}
+
+	bool return_value;
+
+	return_value = load_array(filename, xt_grid, x, t);
+
+	if(!return_value)
+		return false;
+
+	cout << "...done" << endl;
+	return true;
+}
+
+int main(int argc, char *argv[]){
+
+	cout << "Reverse Time Migration," << endl << "  build date/time "
+	    << rtm_build_date << " " << rtm_build_time << endl
+	    << "usage: rtm velocity_infile  xt_infile  dim_x  dim_t" << endl;
+
+	// CMP 125~9824: 9700 inclusively
+	unsigned int dim_x = atoi(argv[3]); // 9700;
+	// 3000ms recording time is used for z scale
+	unsigned int dim_z = atoi(argv[4]); // 3001;
+
+	// CMP spacing
+	unsigned int d_cmp = 6.25;
+
+	// sampling interval is 1ms
+	double dt = 0.001;
+
+	// dx of grid, CMP spacing
+	double dx = d_cmp;
+	// dz comes from sampling interval, dist = vel * time
+	// later change this to use rms vel for vel
+	// current 1500 as vel is to compare with fkmig
+	// or just use dz = dx for square cells
+	//	double dz = 1500.0 * dt;
+	double dz = dx;
+
+	// total process count
+	unsigned int cell_count = dim_x * dim_z;
+
+	// velocity model
+	double* v_plane = new double[cell_count];
+	// return value used to determine file loading success
+	bool return_value_v;
+	// load up velocity model here
+	string vel_if = argv[1];
+	return_value_v = import_vel(vel_if, v_plane, dim_x, dim_z);
+
+	// source data: xt_plane
+	double* xt_plane = new double[cell_count];
+	// return value used to determine file loading success
+	bool return_value_xt;
+	// load up xt plane here
+	string xt_if = argv[2];
+	return_value_xt = import_xt(xt_if, xt_plane, dim_x, dim_z);
+
+	// process cells in three time steps
+	double* xz_plane_0 = new double[cell_count];
+	double* xz_plane_1 = new double[cell_count];
+	double* xz_plane_2 = new double[cell_count];
+
+	// alias for three time steps cell planes
+	// t_minus is target plane that is affected by t_zero and t_plus
+	// these plane will rotate in time for reuse
+	double* t_minus = xz_plane_0;
+	double* t_zero = xz_plane_1;
+	double* t_plus = xz_plane_2;
+
+	// init all processing planes to zero value, just in case
+	for(unsigned int i = 0; i < cell_count; i++){
+		t_minus[i] = t_zero[i] = t_plus[i] = 0.0;
+	}
+
+	// main process; start feeding xt_plane to t_planes
+	//  for(int i=0; i<100; i++){
+	//  	t_zero[i]=(double)(i);
+	//  }
+	//
+	//  for(int i=0; i<20; i++){
+	//  	cout << t_zero[i] << endl;
+	//  }
+	//
+	//  cout << "-------------" << endl;
+	//
+	//  memcpy(t_minus+10, t_zero+20, sizeof(double) * 10);
+	//
+	//  for(int i=0; i<30; i++){
+	//  	cout << t_minus[i] << endl;
+	//  }
+
+
+//	// test for block dot
+//	for(unsigned int i = 40; i < 60; i++){
+//		for(unsigned int j = 40; j < 60; j++){
+//			t_minus[i * dim_x + j] = 1000000;
+//			t_zero[i * dim_x + j] = 4000000;
+//			t_plus[i * dim_x + j] = 8000000;
+//		}
+//	}
+
+	// test for convolution effectiveness
+//	memcpy(t_minus, xt_plane, dim_x * dim_z * sizeof(double));
+//	memcpy(t_zero, xt_plane, dim_x * dim_z * sizeof(double));
+//	memcpy(t_plus, xt_plane, dim_x * dim_z * sizeof(double));
+
+	if(return_value_v && return_value_xt){
+		// temp pointer for rotating three planes
+		double* t_tmp;
+
+		// feed a row at t = rtime into z = 0 and run convolution
+		// rtime starts at 3000 and ends at 0; to tal of 3001 cycles
+		for(int rtime = dim_z - 1; rtime >= 0; rtime--){
+
+			cout << "r-time:" << rtime << endl;
+
+			// rotate three planes
+			t_tmp = t_plus;
+			t_plus = t_zero;
+			t_zero = t_minus;
+			t_minus = t_tmp;
+
+			// feed a line from xt_plane
+			memcpy(t_zero, xt_plane + (dim_x * rtime), dim_x * sizeof(double));
+
+			// convolution for all t_zero cells, except z = 0
+			// iteration starts at 1 because z = 0 is not processed
+			// boundary conditions are taken care of by different kernels
+
+			// case x,z top left corner
+			t_minus[0] = 2 * t_zero[0] - t_plus[0] + v_plane[0]
+			    * (pow((dt / dx), 2) * (t_zero[dim_x + 1] - 2 * t_zero[0] + 0.0)
+			        + pow((dt / dz), 2) * (0.0 - 2 * t_zero[dim_x] + t_zero[dim_x]));
+
+			// case x,z top edge
+			for(unsigned int nx = 1; nx < dim_x - 1; nx++){
+				t_minus[nx] = 2 * t_zero[nx] - t_plus[nx]
+				    + v_plane[nx] * (pow((dt / dx), 2) * (t_zero[nx + 1]
+				        - 2 * t_zero[nx] + t_zero[nx - 1]) + pow(
+				        (dt / dz), 2) * (0.0 - 2 * t_zero[nx] + t_zero[nx + dim_x]));
+			}
+
+			// case x,z top right corner
+			t_minus[dim_x - 1] = 2 * t_zero[dim_x - 1]
+			    - t_plus[dim_x - 1] + v_plane[dim_x - 1] * (pow((dt / dx), 2)
+			    * (0.0 - 2 * t_zero[dim_x - 1] + t_zero[dim_x - 2]) + pow((dt
+			    / dz), 2) * (0.0 - 2 * t_zero[dim_x - 1]
+			    + t_zero[dim_x * 2 - 1]));
+
+			// case mid band including LR edge (LR will be overwritten)
+			//for(unsigned int nxt = dim_x * 2; nxt < dim_x * (dim_z - 1); nxt++){
+			for(unsigned int nxt = dim_x; nxt < dim_x * (dim_z - 1) - 1; nxt++){
+				t_minus[nxt] = 2 * t_zero[nxt] - t_plus[nxt] + pow(v_plane[nxt], 2) *
+						(pow((dt / dx), 2) * (t_zero[nxt + 1] - 2 * t_zero[nxt] + t_zero[nxt - 1]) +
+						 pow((dt / dz), 2) * (t_zero[nxt - dim_x] - 2 * t_zero[nxt] + t_zero[nxt + dim_x]));
+
+//				if(!(nxt%3000)) cout << t_zero[nxt] << " -> " << t_minus[nxt] << endl;
+
+//				t_minus[nxt] = (t_zero[nxt - dim_x] + t_zero[nxt - 1] + 4 * t_zero[nxt] + t_zero[nxt + 1] + t_zero[nxt + dim_x] + 2 * t_plus[nxt]) / 10;
+			}
+
+			// case left edge
+			for(unsigned int ntl = 1; ntl < (dim_z - 1); ntl++){
+				t_minus[ntl * dim_x] = 2 * t_zero[ntl * dim_x] - t_plus[ntl * dim_x] + v_plane[ntl * dim_x] *
+						(pow((dt / dx), 2) * (t_zero[ntl * dim_x + 1] - 2 * t_zero[ntl * dim_x] + 0.0) +
+						 pow((dt / dz), 2) * (t_zero[ntl * dim_x - dim_x] - 2 * t_zero[ntl * dim_x] + t_zero[ntl * dim_x + dim_x]));
+			}
+
+			// case right edge
+			for(unsigned int ntr = 1; ntr < (dim_z - 1); ntr++){
+				t_minus[ntr * dim_x + dim_x -1] = 2 * t_zero[ntr * dim_x + dim_x -1] - t_plus[ntr * dim_x + dim_x -1] + v_plane[ntr * dim_x + dim_x -1] *
+						(pow((dt / dx), 2) * (0.0 - 2 * t_zero[ntr * dim_x + dim_x -1] + t_zero[ntr * dim_x + dim_x -1 - 1]) +
+						 pow((dt / dz), 2) * (t_zero[ntr * dim_x + dim_x -1 - dim_x] - 2 * t_zero[ntr * dim_x + dim_x -1] + t_zero[ntr * dim_x + dim_x -1 + dim_x]));
+			}
+
+			// case bottom left corner
+			t_minus[dim_x * (dim_z - 1)] = 2 * t_zero[dim_x * (dim_z - 1)] - t_plus[dim_x * (dim_z - 1)] + v_plane[dim_x * (dim_z - 1)]
+			    * (pow((dt / dx), 2) * (t_zero[dim_x * (dim_z - 1) + 1] - 2 * t_zero[dim_x * (dim_z - 1)] + 0.0)
+			        + pow((dt / dz), 2) * (t_zero[dim_x * (dim_z - 1) - dim_x] - 2 * t_zero[dim_x * (dim_z - 1)] + 0.0));
+
+			// case bottom edge
+			for(unsigned int ntb = dim_x * (dim_z - 1) + 1; ntb < dim_x * dim_z - 1; ntb++){
+				t_minus[ntb] = 2 * t_zero[ntb] - t_plus[ntb] + v_plane[ntb] *
+						(pow((dt / dx), 2) * (t_zero[ntb + 1] - 2 * t_zero[ntb] + t_zero[ntb - 1]) +
+						 pow((dt / dz), 2) * (t_zero[ntb - dim_x] - 2 * t_zero[ntb] + 0.0));
+			}
+
+			// case bottom right corner
+			t_minus[dim_x * dim_z - 1] = 2 * t_zero[dim_x * dim_z - 1]
+			    - t_plus[dim_x * dim_z - 1] + v_plane[dim_x * dim_z - 1] * (pow((dt / dx), 2)
+			    * (0.0 - 2 * t_zero[dim_x * dim_z - 1] + t_zero[dim_x * dim_z - 1 - 1]) + pow((dt
+			    / dz), 2) * (t_zero[dim_x * dim_z - 1 - dim_x] - 2 * t_zero[dim_x * dim_z - 1] + 0.0));
+
+
+			// test section
+			// mid case extremalizing test
+//			for(unsigned int nxt = dim_x; nxt < dim_x * (dim_z - 1); nxt++){
+//				t_minus[nxt] = t_zero[nxt - dim_x];
+//			}
+			// end extremalizing test
+
+
+		  // write out pgm
+			if((rtime % 32) == 0){
+				string filename = xt_if + "_RTMs_";
+				std::string tmpStrng;
+				std::stringstream tmpStrm;
+				tmpStrm << setfill('0') << setw(5) << rtime;
+				tmpStrng = tmpStrm.str();
+				filename += tmpStrng;
+				if(!double2pgm(filename, t_minus, dim_x, dim_z))
+					cout << "error writing pgm:" << filename << endl;
+			}
+
+		} // end of iteration for reverse time
+
+	} // condition of return_value_v && return_value_xt
+
+	delete[] v_plane;
+	delete[] xt_plane;
+	delete[] xz_plane_0;
+	delete[] xz_plane_1;
+	delete[] xz_plane_2;
+
+	cout << "exiting normally..." << endl;
+	return 0;
+}
